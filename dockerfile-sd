@@ -1,0 +1,76 @@
+ARG BASE_IMAGE="nvidia/cuda:11.7.0-cudnn8-devel-ubuntu22.04"
+FROM $BASE_IMAGE as base_image
+
+ARG USER=admin
+ARG HOME=/home/$USER
+
+ENV DEBIAN_FRONTEND noninteractive
+
+RUN adduser $USER --disabled-password --gecos ''
+
+RUN apt update
+RUN apt install -y apt-utils
+
+RUN apt install -y sudo \
+&& echo "$USER ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+
+RUN apt install -y openssh-server \
+&& sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
+
+RUN apt install -y curl wget git
+
+RUN wget https://github.com/fatedier/frp/releases/download/v0.48.0/frp_0.48.0_linux_amd64.tar.gz \
+&& tar -zxvf frp_0.48.0_linux_amd64.tar.gz \
+&& mv frp_0.48.0_linux_amd64 /usr/local/lib/frp \
+&& rm frp_0.48.0_linux_amd64.tar.gz \
+&& ln -s /usr/local/lib/frp/frpc /usr/local/bin/frpc \
+&& ln -s /usr/local/lib/frp/frps /usr/local/bin/frps
+
+RUN curl -Lk 'https://code.visualstudio.com/sha/download?build=stable&os=cli-alpine-x64' --output vscode_cli.tar.gz \
+&& tar -zxvf vscode_cli.tar.gz \
+&& mv code /usr/local/bin/ \
+&& rm vscode_cli.tar.gz
+
+# Install dependency components.
+RUN apt install -y \
+	    iproute2 \
+	    iputils-ping \
+	    netcat \
+	    socat \
+	    nmap \ 
+	    vim
+
+RUN apt update && apt install -y python3 python3-pip python3-venv libgl1-mesa-glx
+
+RUN apt -y autoclean \
+&& apt -y autoremove \
+&& rm -rf /var/lib/apt/lists/*
+
+USER $USER
+RUN sudo mkdir /app \
+&& sudo chown -R $USER:$USER /app \
+&& cd /app \
+&& git clone https://github.com/AUTOMATIC1111/stable-diffusion-webui.git \
+&& cd stable-diffusion-webui \
+&& cp -f launch.py launch.py.bak \
+&& sed -i '/start()/d' launch.py \
+&& ./webui.sh \
+&& mv -f launch.py.bak launch.py
+
+RUN pip3 cache purge
+
+USER root
+RUN echo '#!/bin/bash' > /.dockerstartup \
+&& echo 'set -x' >> /.dockerstartup \
+&& echo 'sudo service ssh start' >> /.dockerstartup \
+&& echo 'cp -n /etc/skel/.bashrc /etc/skel/.profile /etc/skel/.bash_logout $HOME/' >> /.dockerstartup \
+&& echo 'if [ -f ~/.startup ]; then' >> /.dockerstartup \
+&& echo '    . ~/.startup' >> /.dockerstartup \
+&& echo 'fi' >> /.dockerstartup \
+&& echo 'socat tcp-l:7960,fork,reuseaddr tcp:127.0.0.1:7860 &' >> /.dockerstartup \
+&& echo '/app/stable-diffusion-webui/webui.sh $@' >> /.dockerstartup \
+&& chmod 755 /.dockerstartup
+
+USER $USER
+WORKDIR /app
+ENTRYPOINT ["/.dockerstartup"]
